@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from pipeline import run_pipeline
+from pipeline import run_pipeline, _predecir_m1, _predecir_m3, _predecir_m4
 from llm import obtener_recomendacion_fija, obtener_detalle_fijo, obtener_respuesta_estatica
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
@@ -42,6 +42,14 @@ class PredictResponse(BaseModel):
     categoria: str | None = None
     recomendacion: str = ""
     detalle: dict | None = None
+
+
+class ModelDirectResponse(BaseModel):
+    clase: str
+    confianza: float
+    confianza_pct: float
+    baja_confianza: bool
+    probabilidades: dict[str, float]
 
 
 # ─────────────────────────────────────────────────────
@@ -93,4 +101,80 @@ async def predict(file: UploadFile = File(...)):
         categoria      = resultado.categoria,
         recomendacion  = recomendacion,
         detalle        = detalle,
+    )
+
+
+@app.post("/predict/enfermedades", response_model=ModelDirectResponse)
+async def predict_enfermedades(file: UploadFile = File(...)):
+    """
+    M1 → M4. Primero valida que sea hoja de banano y luego clasifica enfermedades.
+    Clases M4: Cordana, Fusarium, Sano, SigatokaNegra.
+    Retorna 400 si la imagen no es una hoja de banano.
+    """
+    image_bytes = await file.read()
+    log.info(f"📥 [M1→M4] Imagen recibida — {file.filename} ({len(image_bytes) / 1024:.1f} KB)")
+
+    try:
+        pred_m1 = _predecir_m1(image_bytes)
+    except Exception as e:
+        log.error(f"❌ Error en M1: {e}")
+        raise HTTPException(status_code=500, detail=f"Error en M1: {str(e)}")
+
+    if pred_m1.clase == "non_banana_leaf":
+        log.info(f"🚫 [M1] No es hoja de banano ({pred_m1.confianza * 100:.1f}%)")
+        raise HTTPException(status_code=400, detail="La imagen no es una hoja de banano")
+
+    log.info(f"✅ [M1] Hoja de banano ({pred_m1.confianza * 100:.1f}%) → corriendo M4...")
+
+    try:
+        pred = _predecir_m4(image_bytes)
+    except Exception as e:
+        log.error(f"❌ Error en M4: {e}")
+        raise HTTPException(status_code=500, detail=f"Error en M4: {str(e)}")
+
+    log.info(f"✅ [M4] {pred.clase} ({pred.confianza * 100:.1f}%)")
+    return ModelDirectResponse(
+        clase          = pred.clase,
+        confianza      = pred.confianza,
+        confianza_pct  = round(pred.confianza * 100, 1),
+        baja_confianza = pred.baja_confianza,
+        probabilidades = pred.probabilidades,
+    )
+
+
+@app.post("/predict/nutrientes", response_model=ModelDirectResponse)
+async def predict_nutrientes(file: UploadFile = File(...)):
+    """
+    M1 → M3. Primero valida que sea hoja de banano y luego clasifica deficiencias nutricionales.
+    Clases M3: Boron, Calcium, Iron, Magnesium, Manganese, Potassium, Sano, Sulphur.
+    Retorna 400 si la imagen no es una hoja de banano.
+    """
+    image_bytes = await file.read()
+    log.info(f"📥 [M1→M3] Imagen recibida — {file.filename} ({len(image_bytes) / 1024:.1f} KB)")
+
+    try:
+        pred_m1 = _predecir_m1(image_bytes)
+    except Exception as e:
+        log.error(f"❌ Error en M1: {e}")
+        raise HTTPException(status_code=500, detail=f"Error en M1: {str(e)}")
+
+    if pred_m1.clase == "non_banana_leaf":
+        log.info(f"🚫 [M1] No es hoja de banano ({pred_m1.confianza * 100:.1f}%)")
+        raise HTTPException(status_code=400, detail="La imagen no es una hoja de banano")
+
+    log.info(f"✅ [M1] Hoja de banano ({pred_m1.confianza * 100:.1f}%) → corriendo M3...")
+
+    try:
+        pred = _predecir_m3(image_bytes)
+    except Exception as e:
+        log.error(f"❌ Error en M3: {e}")
+        raise HTTPException(status_code=500, detail=f"Error en M3: {str(e)}")
+
+    log.info(f"✅ [M3] {pred.clase} ({pred.confianza * 100:.1f}%)")
+    return ModelDirectResponse(
+        clase          = pred.clase,
+        confianza      = pred.confianza,
+        confianza_pct  = round(pred.confianza * 100, 1),
+        baja_confianza = pred.baja_confianza,
+        probabilidades = pred.probabilidades,
     )
