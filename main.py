@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from pipeline import run_pipeline
-from llm import generar_recomendacion, obtener_respuesta_estatica
+from llm import obtener_recomendacion_fija, obtener_detalle_fijo, obtener_respuesta_estatica
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("bananavision")
@@ -41,6 +41,7 @@ class PredictResponse(BaseModel):
     baja_confianza: bool = False
     categoria: str | None = None
     recomendacion: str = ""
+    detalle: dict | None = None
 
 
 # ─────────────────────────────────────────────────────
@@ -73,17 +74,14 @@ async def predict(file: UploadFile = File(...)):
     diag = f"→ {resultado.diagnostico} ({confianza_pct}%){baja}" if resultado.diagnostico else ""
     log.info(f"✅ Resultado: flujo={resultado.flujo}  {diag}")
 
-    # RAG: genera recomendación si hay diagnóstico, estática si no
-    if resultado.llm_needed:
-        log.info(f"🤖 Consultando RAG para '{resultado.diagnostico}'...")
-        try:
-            recomendacion = generar_recomendacion(resultado)
-            log.info("💬 RAG respondió correctamente")
-        except Exception as e:
-            log.warning(f"⚠️  RAG falló, usando respuesta estática: {e}")
-            recomendacion = obtener_respuesta_estatica(resultado.flujo)
+    # Respuesta fija basada en los documentos de DOCUMENTOS RAG
+    if resultado.llm_needed and resultado.diagnostico:
+        log.info(f"📄 Generando recomendación fija para '{resultado.diagnostico}'...")
+        recomendacion = obtener_recomendacion_fija(resultado.diagnostico)
+        detalle = obtener_detalle_fijo(resultado.diagnostico)
     else:
         recomendacion = obtener_respuesta_estatica(resultado.flujo)
+        detalle = None
 
     return PredictResponse(
         flujo          = resultado.flujo,
@@ -94,4 +92,5 @@ async def predict(file: UploadFile = File(...)):
         baja_confianza = resultado.baja_confianza,
         categoria      = resultado.categoria,
         recomendacion  = recomendacion,
+        detalle        = detalle,
     )
