@@ -1,60 +1,43 @@
 # llm/gemini_client.py
 """
-Cliente Gemini para BananaVision.
+Cliente OpenAI para BananaVision.
 
 Recibe un PipelineResult ya procesado y genera una recomendación
-en lenguaje natural para el agricultor.
+en lenguaje natural para el agricultor usando GPT-4o mini.
 
 NO hace diagnóstico — eso lo hacen los modelos .keras.
 Solo traduce el diagnóstico técnico a lenguaje útil y accionable.
 """
 
 import os
-from google import genai
-from google.genai import types
+import base64
+from openai import OpenAI
 from pipeline.schemas import PipelineResult
 from llm.base_conocimiento import cargar_documento_rag, BASE_COMPLETA
 
-# ⚙️ PARÁMETRO — Configurar via variable de entorno GEMINI_API_KEY
-# Obtener key gratis en: https://aistudio.google.com/apikey
+# ⚙️ PARÁMETRO — Configurar via variable de entorno OPENAI_API_KEY
 _client = None
 
 def _setup():
     global _client
     if _client is None:
-        api_key = os.environ.get("GEMINI_API_KEY")
+        api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise ValueError(
-                "GEMINI_API_KEY no configurada. "
-                "Exporta: export GEMINI_API_KEY='tu_key_aqui'"
+                "OPENAI_API_KEY no configurada. "
+                "Exporta: export OPENAI_API_KEY='tu_key_aqui'"
             )
-        _client = genai.Client(
-            api_key=api_key,
-            http_options={"api_version": "v1"},
-        )
+        _client = OpenAI(api_key=api_key)
     return _client
 
 
 # ⚙️ PARÁMETRO — Cambiar modelo si se necesita más capacidad:
-# "gemini-2.0-flash"  → rápido y gratis (recomendado para hackathon)
-# "gemini-2.0-pro"    → más preciso, límite de requests menor
-MODELO_GEMINI = "gemini-1.5-flash"
+# "gpt-4o-mini"  → rápido y económico (recomendado)
+# "gpt-4o"       → más preciso, más costo
+MODELO = "gpt-4o-mini"
 
 
 def _construir_prompt(ctx: dict) -> str:
-    """
-    Construye el prompt para Gemini basado en el contexto del pipeline.
-
-    ctx viene de PipelineResult.to_llm_context():
-    {
-        "flujo": "ENFERMO" | "DEFICIT",
-        "diagnostico": "Fusarium" | "Potassium" | etc.,
-        "confianza_pct": 87.3,
-        "baja_confianza": False,
-        "categoria": "enfermedad" | "deficiencia"
-    }
-    """
-
     advertencia_confianza = ""
     if ctx.get("baja_confianza"):
         advertencia_confianza = (
@@ -95,52 +78,43 @@ Responde SOLO con el mensaje para el agricultor, sin encabezados ni explicacione
 def generar_recomendacion(resultado: PipelineResult) -> str:
     """
     Función principal: recibe PipelineResult → devuelve string con recomendación.
-
     Solo se llama cuando resultado.llm_needed == True.
-    Para flujos SANO y NO_BANANA usar respuestas_estaticas.py
     """
     client = _setup()
-
     ctx = resultado.to_llm_context()
     prompt = _construir_prompt(ctx)
 
-    # ⚙️ PARÁMETRO — Ajustar temperature si las respuestas salen muy variables
-    # 0.3 = más consistente, 0.7 = más creativo
-    response = client.models.generate_content(
-        model=MODELO_GEMINI,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=300,
-        )
+    response = client.chat.completions.create(
+        model=MODELO,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=300,
     )
 
-    return response.text.strip()
+    return response.choices[0].message.content.strip()
 
 
 def generar_recomendacion_con_imagen(resultado: PipelineResult, imagen_bytes: bytes) -> str:
     """
-    Versión multimodal: pasa también la imagen a Gemini.
-    Gemini puede ver la foto además del diagnóstico del modelo.
-
-    ⚙️ PARÁMETRO — Activar esta versión si se quiere que Gemini
-    confirme visualmente el diagnóstico del modelo .keras
+    Versión multimodal: pasa también la imagen a GPT-4o mini.
     """
     client = _setup()
-
     ctx = resultado.to_llm_context()
     prompt = _construir_prompt(ctx)
 
-    response = client.models.generate_content(
-        model=MODELO_GEMINI,
-        contents=[
-            prompt,
-            types.Part.from_bytes(data=imagen_bytes, mime_type="image/jpeg"),
-        ],
-        config=types.GenerateContentConfig(
-            temperature=0.3,
-            max_output_tokens=300,
-        )
+    imagen_b64 = base64.b64encode(imagen_bytes).decode("utf-8")
+
+    response = client.chat.completions.create(
+        model=MODELO,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{imagen_b64}"}},
+            ],
+        }],
+        temperature=0.3,
+        max_tokens=300,
     )
 
-    return response.text.strip()
+    return response.choices[0].message.content.strip()

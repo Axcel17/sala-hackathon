@@ -9,8 +9,8 @@ fastapi
 uvicorn[standard]
 python-multipart
 
-# Gemini
-google-genai>=1.0.0
+# LLM
+openai>=1.0.0
 
 # Utilidades
 numpy
