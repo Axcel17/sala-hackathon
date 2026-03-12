@@ -1,0 +1,17 @@
+# Pipeline de modelos
+# TF 2.16+ soporta Python 3.12. tf-keras provee compatibilidad Keras 2.x para M1.
+tensorflow>=2.16.0
+keras
+tf-keras
+
+# API
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Gemini
+google-genai>=1.0.0
+
+# Utilidades
+numpy
+pillow
