@@ -1,10 +1,10 @@
-# api.py
+# main.py
 """
 Servidor FastAPI que expone el pipeline de diagnóstico de hojas de banano.
 
 Endpoints:
     GET  /health   → estado del servidor y modelos
-    POST /predict  → recibe imagen como archivo (multipart), devuelve diagnóstico
+    POST /predict  → recibe imagen como archivo (multipart), devuelve diagnóstico + recomendación RAG
 """
 
 import logging
@@ -13,11 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from pipeline import run_pipeline
+from llm import generar_recomendacion, obtener_respuesta_estatica
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("bananavision")
 
-app = FastAPI(title="BananaVision API", version="1.0.0")
+app = FastAPI(title="BananaVision API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,6 +40,7 @@ class PredictResponse(BaseModel):
     confianza_pct: float | None = None
     baja_confianza: bool = False
     categoria: str | None = None
+    recomendacion: str = ""
 
 
 # ─────────────────────────────────────────────────────
@@ -54,20 +56,8 @@ def health():
 @app.post("/predict", response_model=PredictResponse)
 async def predict(file: UploadFile = File(...)):
     """
-    Recibe una imagen como archivo y devuelve el diagnóstico del pipeline.
-
-    Enviar como multipart/form-data con el campo 'file'.
-
-    Response JSON:
-        {
-            "flujo": "ENFERMO" | "DEFICIT" | "SANO" | "NO_BANANA",
-            "llm_needed": true | false,
-            "diagnostico": "Fusarium" | "Potassium" | null,
-            "confianza": 0.87,
-            "confianza_pct": 87.0,
-            "baja_confianza": false,
-            "categoria": "enfermedad" | "deficiencia" | null
-        }
+    Recibe una imagen como archivo y devuelve el diagnóstico del pipeline
+    más una recomendación generada por el RAG (OpenAI GPT-4o mini + documentos agrícolas).
     """
     image_bytes = await file.read()
     log.info(f"📥 Imagen recibida — {file.filename} ({len(image_bytes) / 1024:.1f} KB)")
@@ -83,6 +73,18 @@ async def predict(file: UploadFile = File(...)):
     diag = f"→ {resultado.diagnostico} ({confianza_pct}%){baja}" if resultado.diagnostico else ""
     log.info(f"✅ Resultado: flujo={resultado.flujo}  {diag}")
 
+    # RAG: genera recomendación si hay diagnóstico, estática si no
+    if resultado.llm_needed:
+        log.info(f"🤖 Consultando RAG para '{resultado.diagnostico}'...")
+        try:
+            recomendacion = generar_recomendacion(resultado)
+            log.info("💬 RAG respondió correctamente")
+        except Exception as e:
+            log.warning(f"⚠️  RAG falló, usando respuesta estática: {e}")
+            recomendacion = obtener_respuesta_estatica(resultado.flujo)
+    else:
+        recomendacion = obtener_respuesta_estatica(resultado.flujo)
+
     return PredictResponse(
         flujo          = resultado.flujo,
         llm_needed     = resultado.llm_needed,
@@ -91,4 +93,5 @@ async def predict(file: UploadFile = File(...)):
         confianza_pct  = confianza_pct,
         baja_confianza = resultado.baja_confianza,
         categoria      = resultado.categoria,
+        recomendacion  = recomendacion,
     )
