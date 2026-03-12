@@ -1,0 +1,3 @@
+data/**
+!data/test_pipeline
+!data/test_pipeline/**
